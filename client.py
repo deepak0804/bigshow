@@ -10,10 +10,13 @@ def start_client():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         client_socket.connect((HOST, PORT))
         print("Connected to the server. \n")
-    
-        while True:
+        initial_hand = client_socket.recv(1024).decode()
+        if "Minimum players not connected. Unable to start the game." in initial_hand:
+            print("Minimum players not connected. Unable to start the game.")
+            client_socket.close()
+            return
         
-            initial_hand = client_socket.recv(1024).decode()
+        while True:
             print("\nYour initial hand of cards:")
             print(initial_hand)
         

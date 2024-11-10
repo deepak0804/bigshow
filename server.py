@@ -3,6 +3,7 @@ import threading
 import random
 import time
 import re
+import select
 ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
 values = {'2': 2, '3' : 3, '4' : 4, '5' : 5, '6' : 6, '7' : 7 , '8' : 8, '9' : 9, '10' : 10, 'J' : 10, 'Q' : 10, 'K' : 10, 'A' : 1}
 
@@ -15,7 +16,7 @@ last_discarded_card = None
 rounds_completed = 0
 clients = []
 max_players = 6
-game_start_time = 30
+game_start_time = 10
 deck = []
 current_turn = 1
 turn_ondition = threading.Condition()
@@ -24,6 +25,7 @@ players_ready_to_show = 0
 player_rounds = {}
 discarded_pile = []
 show_flag = False
+start_condition = True
 
 def create_deck(num_players):
     single_deck = ranks * 4 + ['Joker', 'Joker']
@@ -88,14 +90,9 @@ def handle_client(conn, player_id):
         conn.sendall(f"Your initial hand: {', '.join(hand)}\n".encode())
         
         while not game_over:
-
-            
             with turn_ondition:
                 while current_turn != player_id:
                     turn_ondition.wait()
-                    
-                    
-                
                 player_rounds[player_id] += 1
                 
                 try:
@@ -116,16 +113,21 @@ def handle_client(conn, player_id):
                     conn.sendall("No discarded card available yet.\n".encode())
                 
                 conn.sendall("Please discard your lowest card: ".encode())
-                discarded_card = conn.recv(1024).decode().strip()
-                if discarded_card in hand:
+                ready = select.select([conn], [], [], 10)  # Wait for up to 10 seconds
+                if ready[0]:
+                    discarded_card = conn.recv(1024).decode().strip()
+                    print(f"discarded card: {discarded_card}\n")
+                    if discarded_card in hand:
                     
-                    hand.remove(discarded_card)
+                        hand.remove(discarded_card)
             
-                    player_discarded_card = discarded_card
+                        player_discarded_card = discarded_card
                     
+                    else:
+                        conn.sendall(f"Error: You dont have {discarded_card} in your hand. \n".encode())
+                        continue
                 else:
-                    conn.sendall(f"Error: You dont have {discarded_card} in your hand. \n".encode())
-                    continue
+                    print(f"No response from client within 10 seconds. Continuing...\n")
            # last_discarded_card = discarded_card
             
                 if player_id == 1 and player_rounds[player_id] == 1:
@@ -222,8 +224,9 @@ def handle_client(conn, player_id):
     #conn.close()
     conn.sendall("The game has ended\n".encode())
 def start_game():
-    time.sleep(game_start_time)  # Wait for 30 seconds
-    if len(clients) > 0:
+    global start_condition
+    time.sleep(game_start_time+2)  # Wait for 30 seconds
+    if len(clients) >= 2:
         print("30 seconds have passed. Game starts now.")
         num_players = len(clients)
         deck = create_deck(num_players)
@@ -232,13 +235,16 @@ def start_game():
         for player_id, conn in enumerate(clients, start=1):
             threading.Thread(target=handle_client, args=(conn, player_id)).start()
     else:
-        print("No players connected. Unable to start the game.")
+        print("Minimum players not connected. Unable to start the game.")
+        start_condition = False
+        return
 
         
 def start_server():
-    global deck
+    global deck, start_condition
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind((HOST, PORT))
         server_socket.listen()
         print(f"Server started on {HOST}:{PORT}. Waiting for players to connect ...")
@@ -247,11 +253,16 @@ def start_server():
         start_time = None
         player_id = 1
         threading.Thread(target=start_game, daemon=True).start()
+        time.sleep(game_start_time)
         while True:
             conn, address = server_socket.accept()
             player_id += len(clients)
             print(f"Player {player_id} connected from {address}")
             clients.append(conn)
+            if not start_condition:
+                conn.sendall("Minimum players not connected. Unable to start the game.\n".encode())
+                conn.close()
+                return
   # Exit loop to start the game
 
         print("30 seconds have passed. Game starts now.")
